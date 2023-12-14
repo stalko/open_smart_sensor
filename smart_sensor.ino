@@ -1,124 +1,146 @@
-/* DHTServer - ESP8266 Webserver with a DHT sensor as an input
-
-   Based on ESP8266Webserver, DHTexample, and BlinkWithoutDelay (thank you)
-https://github.com/IOT-MCU/ESP-01S-DHT11-v1.0
-   Version 1.0  5/3/2014  Version 1.0   Mike Barela for Adafruit Industries
-*/
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
 #include <ESP8266HTTPClient.h>
 #include <Adafruit_AHTX0.h>
+#include <AHT20.h>
 #define DHTTYPE DHT22
 #define SDA 0
 #define SCL 2
 
-// Replace with your network details
-const char* ssid     = "";
-const char* password = "";
-const String host = "";
+//----------------------Config-------------------------
+// Wifi connection
+#define WIFI_SSID ""
+#define WIFI_AUTH ""
+
+// data from DHCP: IP address, network mask, Gateway, DNS
+#define DATA_IPADDR IPAddress(192,168,178,228)  //Test
+//#define DATA_IPADDR IPAddress(192,168,178,203)  //Kid's
+//#define DATA_IPADDR IPAddress(192,168,178,229)  //Test 2
+#define DATA_IPMASK IPAddress(255,255,255,0)
+#define DATA_GATEWY IPAddress(192, 168, 178, 1)
+#define DATA_DNS1   IPAddress(213,46,228,196)
+#define DATA_DNS2   IPAddress(62,179,104,196)
+
+// data from your Wifi connect: Channel, BSSID
+#define DATA_WIFI_CH 4
+#define DATA_WIFI_BSSID {0x1C, 0xED, 0x6F, 0x62, 0x49, 0x5B}
+#define WIFI_CONNECTION_TIMEOUT 3000 // 3sec 
+
+#define LED_BUILDIN 2
+#define analogPin A0 /* ESP8266 Analog Pin ADC0 = A0 */
+
+// data for Home assistant
+const String host = "http://127.0.0.1:8123";
 const String token = "";
-const String entity_id = "esp-01";
-//ESP-01 i2c pins (arduino defaults to 4/5)
+const String entity_id = "esp_12_v3";  //Test
+//const String entity_id = "esp_02";  //Kid's
+//const String entity_id = "esp_03";  //Test 3
+//-----------------------------------------------------------
 
 Adafruit_AHTX0 aht;
-
-// the following variables are unsigned longs because the time, measured in
-// milliseconds, will quickly become a bigger number than can be stored in an int.
-unsigned long lastTime = 0;
-// Timer set to 10 minutes (600000)
-//unsigned long timerDelaySend = 600000;
-// Set timer to 5 seconds (5000)
-unsigned long timerDelaySend = 5000;
-// Set timer to 5 minutes (300000)
-// unsigned long timerDelaySend = 300000;
-
-unsigned long previousMillis = 0;        // will store last temp was read
-const long interval = 5000;              // interval at which to read sensor
-
+AHT20 aht20;
 float current_humidity;
 float current_temperature;
-float prev_humidity;
-float prev_temperature;
-
-float humidity_arr[12];
-int current_humidity_index = 0;
-
-float temperature_arr[12];
-int current_temperature_index = 0;
+float current_voltage;
+int heat_up_sensor = 6;
 
  
 void setup(void)
 {
-  // You can open the Arduino IDE Serial Monitor window to see what the code is doing
-  Serial.begin(115200);  // Serial connection from ESP-01 via 3.3v console cable
+  pinMode(LED_BUILDIN, OUTPUT);//setup build in LED
+
+  // Why are we awake?
+  //getWakeUpReason();
+
+  // WiFi.setAutoConnect(false); // prevent early autoconnect
+  
+  Serial.begin(115200);  // Serial connection from ESP8266 via 3.3v console cable
   Serial.println("setup");
 
-  //Serial.print("Wire.begin(");Serial.print(SCL);Serial.print(",");Serial.print(SDA);Serial.print(")");;
   Wire.begin(SCL,SDA);
 
-  if (!aht.begin()) {
-    Serial.println("Could not find AHT? Check wiring");
-    while (1) delay(10);
+  if (aht20.begin() == false)
+  {
+    Serial.println("AHT20 not detected. Please check wiring. Freezing.");
+    while (1);
   }
-  // Connect to WiFi network
-  // WiFi.begin(ssid, password);
-  // Serial.print("\n\r \n\rWorking to connect");
-
-  // Wait for connection
-  // while (WiFi.status() != WL_CONNECTED) {
-  //   delay(500);
-  //   Serial.print(WiFi.status());
-  //   Serial.print(".");
-  // }
-  // Serial.println("");
-  // Serial.println("DHT Weather Reading Server");
-  // Serial.print("Connected to ");
-  // Serial.println(ssid);
-  // Serial.print("IP address: ");
-  // Serial.println(WiFi.localIP());
 }
- 
+
+
 void loop(void)
 {
   Serial.println("loop");
-  // Wait at least 5 seconds seconds between measurements.
-  // if the difference between the current time and last time you read
-  // the sensor is bigger than the interval you set, read the sensor
-  // Works better than delay for things happening elsewhere also
-  // unsigned long currentMillis = millis();
- 
-  // if(currentMillis - previousMillis >= interval) {
-  //   // save the last time you read the sensor 
-  //   previousMillis = currentMillis;
-    
-  // }
 
-  //Serial.println("Reading");
-  readSensor();
-  SendAllData();
+  getVoltage();
+  readSensorAHT20();
+  wifiConnect();
+  sendSensorData();
 
-  // delay(1000);
-  //1,000,000 = 1 second
-  ESP.deepSleep(5000000);
+  Serial.println("Sleep");
+  ESP.deepSleep(300000000, WAKE_RF_DEFAULT);//5 mins, 1800 * 1e6 = 30 mins
+  
+  //The AHT20 can respond with a reading every ~50ms. However, increased read time can cause the IC to heat around 1.0C above ambient.
+  //The datasheet recommends reading every 2 seconds.
 }
 
-void SendAllData(){
-  WiFi.begin(ssid, password);
-  Serial.print("\n\r \n\rWorking to connect");
-  // Wait for connection
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(WiFi.status());
-    Serial.print(".");
-  }
-  sendSensorDataTemperature();
+void getVoltage(){
+  int adcValue = analogRead(analogPin); /* Read the Analog Input value */
+  /* Print the output in the Serial Monitor */
+  Serial.print("ADC Value = ");
+  Serial.println(adcValue);
   
-  // WiFi.disconnect(true);
+  current_voltage = adcValue * 3.3/1023;
+  Serial.print("Voltage = ");
+  Serial.println(current_voltage);
+}
+
+void wifiConnect() {
+  char my_ssid[] = WIFI_SSID;
+  char my_auth[] = WIFI_AUTH;
+  WiFi.begin(&my_ssid[0], &my_auth[0]);
+  while ((WiFi.status() != WL_CONNECTED)) { delay(5); }
+  Serial.print("Connect to WIFI: Done");
+}
+
+void wifiConnectFast() {
+  Serial.println("\nConnect to WIFI: Starting.");
+  uint32_t ts_start = millis();
+  // WiFi.onEvent(WiFiEvent);
+  WiFi.disconnect(true); // delete old config
+  WiFi.persistent(false); //Avoid to store Wifi configuration in Flash
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.config(DATA_IPADDR, DATA_GATEWY, DATA_IPMASK);
+  uint8_t my_bssid[] = DATA_WIFI_BSSID;
+  char my_ssid[] = WIFI_SSID;
+  char my_auth[] = WIFI_AUTH;
+  WiFi.begin(&my_ssid[0], &my_auth[0], DATA_WIFI_CH, &my_bssid[0], true);
+  int countRetry = 0;
+  while ((WiFi.status() != WL_CONNECTED)) {
+    if(WIFI_CONNECTION_TIMEOUT < countRetry){
+      break;
+    }
+    countRetry+=5;
+    delay(5);
+  }
+  Serial.print("Timing wifiConnect(): "); Serial.print(millis()-ts_start); Serial.println("ms");
+  Serial.print("Connect to WIFI: Done");
+}
+
+void WiFiEvent(WiFiEvent_t event)
+{
+    Serial.printf("[WiFi-event] event: %d timestamp:%d\n", event, millis());
+    switch (event)
+    {
+    case WIFI_EVENT_STAMODE_GOT_IP:
+        Serial.printf("WiFi connected IP address: %s duration %d\n", WiFi.localIP().toString().c_str(),millis());
+        break;
+    }
 }
 
 void readSensor() {
   sensors_event_t humidity, temp;
   aht.getEvent(&humidity, &temp);// populate temp and humidity objects with fresh data
+  Serial.println();
   Serial.print("Temperature: "); Serial.print(temp.temperature); Serial.println(" degrees C");
   Serial.print("Humidity: "); Serial.print(humidity.relative_humidity); Serial.println("% rH");
 
@@ -132,90 +154,40 @@ void readSensor() {
   current_temperature = temp.temperature;
 }
 
-void setSensorData(float humidity, float temperature){
-  if(sizeof(humidity_arr) <= current_humidity_index || sizeof(temperature_arr) <= current_temperature_index){
-    return;
+void readSensorAHT20(){
+  int countRetry = 0;
+  while(!aht20.available()){
+    if(200 < countRetry){
+      break;
+    }
+    Serial.println("Wait aht21");
+    countRetry+=20;
+    delay(20);
   }
-  humidity_arr[current_humidity_index] = humidity;
-  current_humidity_index++;
+  current_temperature = aht20.getTemperature();
+  current_humidity = aht20.getHumidity();
 
-  temperature_arr[current_temperature_index] = temperature;
-  current_temperature_index++;
-}
-
-void cleanSensorData(){
-  // for(int i = 0; i < sizeof(humidity_arr); i++)
+  Serial.println("Currently temp");
+  Serial.println(current_temperature);
+  
+  // if (aht20.available() == true)
   // {
-  //   humidity_arr[i] = 0;
-  // }
-
-  // for(int i = 0; i < sizeof(temperature_arr); i++)
-  // {
-  //   temperature_arr[i] = 0;
+  //   current_temperature = aht20.getTemperature();
+  //   current_humidity = aht20.getHumidity();
+  // } else {
+  //   Serial.println("Failed to read from aht20 sensor!");
   // }
 }
 
 void sendSensorData(){
+  Serial.println("\nSend Data: Starting.");
   WiFiClient client;
   HTTPClient http;
-  
-  http.begin(client, host+"/api/services/sensor.esp_3_temperature");
+
+  http.begin(client, host+"/api/states/sensor." + entity_id+"_temperature");
   http.addHeader("Authorization", "Bearer "+token);
   http.addHeader("Content-Type", "application/json");
-  
-  String httpRequestData = "{\"state\": \"" + String(current_temperature) + "\", \"attributes\": {\"unit_of_measurement\": \"°C\", \"device_class\": \"temperature\"}}";  
-
-  int httpResponseCode = http.POST(httpRequestData);
-  
-  // Serial.print("HTTP Response code: ");
-  // Serial.println(httpResponseCode);
-    
-  // Free resources
-  http.end();
-}
-
-void sendSensorDataTemperature(){
-  WiFiClient client;
-  HTTPClient http;
-  
-  // Your Domain name with URL path or IP address with path
-  http.begin(client, host+"/api/states/sensor.esp_3_temperature");
-
-  // If you need Node-RED/server authentication, insert user and password below
-  //http.setAuthorization("REPLACE_WITH_SERVER_USERNAME", "REPLACE_WITH_SERVER_PASSWORD");
-  http.addHeader("Authorization", "Bearer "+token);
-
-  // Specify content-type header
-  http.addHeader("Content-Type", "application/json");
-  // Data to send with HTTP POST
-  String httpRequestData = "{\"state\": \"" + String(current_temperature) + "\", \"attributes\": {\"unit_of_measurement\": \"°C\", \"device_class\": \"temperature\"}}";           
-  // Send HTTP POST request
-  int httpResponseCode = http.POST(httpRequestData);
-  
-  // If you need an HTTP request with a content type: application/json, use the following:
-  //http.addHeader("Content-Type", "application/json");
-  //int httpResponseCode = http.POST("{\"api_key\":\"tPmAT5Ab3j7F9\",\"sensor\":\"BME280\",\"value1\":\"24.25\",\"value2\":\"49.54\",\"value3\":\"1005.14\"}");
-
-  // If you need an HTTP request with a content type: text/plain
-  //http.addHeader("Content-Type", "text/plain");
-  //int httpResponseCode = http.POST("Hello, World!");
-  
-  Serial.print("HTTP Response code: ");
-  Serial.println(httpResponseCode);
-    
-  // Free resources
-  http.end();
-}
-
-void sendSensorDataHumidity(){
-  WiFiClient client;
-  HTTPClient http;
-  
-  // Your Domain name with URL path or IP address with path
-  http.begin(client, host+"/api/states/sensor.esp_3_humidity");
-  http.addHeader("Authorization", "Bearer "+token);
-  http.addHeader("Content-Type", "application/json");
-  String httpRequestData = "{\"state\": \"" + String(current_humidity) + "\", \"attributes\": {\"unit_of_measurement\": \"%\", \"device_class\": \"humidity\"}}";
+  String httpRequestData = "{\"state\": \"" + String(current_temperature) + "\", \"attributes\": {\"unit_of_measurement\": \"°C\", \"device_class\": \"temperature\", \"humidity\":\"" + String(current_humidity) + "\", \"battery_voltage\":\"" + String(current_voltage) + "\"}}";
   int httpResponseCode = http.POST(httpRequestData);
   Serial.print("HTTP Response code: ");
   Serial.println(httpResponseCode);
@@ -224,26 +196,25 @@ void sendSensorDataHumidity(){
 
 //------------Light sleep----------
 
-#define sleepTimeSeconds 250
-#define sleepCountMax 3
-int sleepCount = 0;
+// #define sleepTimeSeconds 250
+// #define sleepCountMax 3
+// int sleepCount = 0;
 
-// void loop() { 
-//     if (sleepCount == 0) { 
-//         //Do Stuff 
-//     }
+// // void loop() { 
+// //     if (sleepCount == 0) { 
+// //         //Do Stuff 
+// //     }
 
-//     lightSleep(); 
-//     if (sleepCount == sleepCountMax) { 
-//         sleepCount = 0; 
-//     } else { 
-//         sleepCount++; 
-//     } 
-// }
+// //     lightSleep(); 
+// //     if (sleepCount == sleepCountMax) { 
+// //         sleepCount = 0; 
+// //     } else { 
+// //         sleepCount++; 
+// //     } 
+// // }
 
-void lightSleep() { 
-    Serial.print("Sleeping ");
-    Serial.println(sleepCount);
+void lightSleep(int sleepTimeSeconds) { 
+    Serial.println("Light sleep");
     Serial.flush();
     WiFi.mode(WIFI_OFF);
     extern os_timer_t *timer_list; 
@@ -252,10 +223,59 @@ void lightSleep() {
     wifi_fpm_set_wakeup_cb(wakeupCallback); 
     wifi_fpm_open(); 
     wifi_fpm_do_sleep(sleepTimeSeconds * 1000 * 1000);
-    delay((sleepTimeSeconds * 1000) + 1); 
 }
 
 void wakeupCallback() { 
     Serial.println("Wakeup"); 
     Serial.flush();
 }
+//----------------------------------------------
+
+// Place all variables you want to retain across sleep periods in the 
+// RTC SRAM. 8kB SRAM on the RTC for all variables.
+// RTC_DATA_ATTR int bootCount = 0;
+
+// void getWakeUpReason() {
+//   log_w("This is (re)boot #%d", ++bootCount);
+
+//   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+//   switch (wakeup_reason) {
+//     case ESP_SLEEP_WAKEUP_EXT0:
+//       log_w("Wakeup caused by external signal using RTC_IO");
+//       break;
+//     case ESP_SLEEP_WAKEUP_EXT1:
+//       log_w("Wakeup caused by external signal using RTC_CNTL");
+//       break;
+//     case ESP_SLEEP_WAKEUP_TIMER:
+//       log_w("Wakeup caused by RTC timer");
+//       break;
+//     case ESP_SLEEP_WAKEUP_TOUCHPAD:
+//       log_w("Wakeup caused by touchpad");
+//       break;
+//     case ESP_SLEEP_WAKEUP_ULP:
+//       log_w("Wakeup caused by ULP program");
+//       break;
+//     default:
+//       log_w("Wakeup was not caused by deep sleep: %d", wakeup_reason);
+//   }
+// }
+
+void blinkWithLED(int count){
+  turnOffLED();
+  for (int i = 0; i < count; i++) {
+    turnOnLED();
+    delay(1000);
+    turnOffLED();
+    delay(1000);
+  }
+}
+
+void turnOnLED(){
+  digitalWrite(LED_BUILDIN, LOW);
+}
+
+void turnOffLED(){
+  digitalWrite(LED_BUILDIN, HIGH);
+}
+
+
