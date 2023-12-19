@@ -1,4 +1,4 @@
-# SMART SENSOR
+# OPEN SMART SENSOR - OSS
 
 This sensor allows you to keep track state of the house (like temperature and humidity) more precisely. With this data, you can control your environment better and accurate.
 
@@ -16,7 +16,7 @@ This sensor include:
 - [x] Deep sleep to save battery power
 - [x] Read voltage
 - [x] Integrate with Home Assistant over external API
-- [ ] WEB configuration(setup WIFI config, HA config, deep sleep time)
+- [x] WEB configuration(setup WIFI config, HA config, deep sleep time)
 - [ ] Fast connection with saving IP, Channel and more
 - [ ] Show the temperature by clicking a button
 - [ ] Update over WiFi
