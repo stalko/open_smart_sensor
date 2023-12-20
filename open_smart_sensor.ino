@@ -19,6 +19,7 @@
 #define analogPin A0 /* ESP8266 Analog Pin ADC0 = A0 */
 #define WAKE_UP_DUE_TO_HARD_RESET 6
 #define WIFI_AP_NAME "OSS"
+#define DEBUG_MODE false
 
 const unsigned long SLEEP_SECOND =  1000 * 1000; // 1 sec
 
@@ -29,23 +30,23 @@ float current_temperature;
 float current_voltage;
 
 struct Configuration {
-  String ssid;
-  String pass;
+  char ssid[32] = "";
+  char pass[32] = "";
 
-  boolean optimize_wifi_connection;
+  boolean optimize_wifi_connection = false;
 
-  byte bssid[6]; //TODO: implement reading
-  int32_t channel; //TODO: implement reading
-  String local_ip;  //TODO: implement reading
-  String gateway; //TODO: implement reading
-  String subnet; //TODO: implement reading
+  byte bssid[6] = ""; //TODO: implement reading
+  int32_t channel = 0; //TODO: implement reading
+  uint32_t local_ip = 0;  //TODO: implement reading
+  uint32_t gateway = 0; //TODO: implement reading
+  uint32_t subnet = 0; //TODO: implement reading
 
-  String ha_url;
-  String ha_access_key;
+  char ha_url[100] = "";
+  char ha_access_key[200] = "";
 
-  int deep_sleep_sec;
+  int deep_sleep_sec = 600;
 
-  float max_voltage;
+  float max_voltage = 3.3;
 } settings;
 
 uint8_t wakeup_reason;
@@ -81,8 +82,10 @@ void setup(void)
 
   if (aht20.begin() == false)
   {
-    Serial.println("AHT20 not detected. Please check wiring. Freezing.");
-    while (1);
+    if(!DEBUG_MODE){
+      Serial.println("AHT20 not detected. Please check wiring. Freezing.");
+      while (1);
+    }
   }
 
   if(wakeup_reason == WAKE_UP_DUE_TO_HARD_RESET){// double click reset button
@@ -91,6 +94,7 @@ void setup(void)
   }
 
   if(config_mode){
+    Serial.println("Turn on Wi-Fi hotspot");
     setupWiFiAndServer();
   }
 }
@@ -130,6 +134,15 @@ void wifiConnect() {
   WiFi.begin(settings.ssid, settings.pass);
   while ((WiFi.status() != WL_CONNECTED)) { delay(5); }//TODO: handle timeout
   Serial.print("Connect to WIFI: Done");
+
+  if(settings.optimize_wifi_connection){
+    Serial.print("Optimizing connections");
+    // WiFi.localIP().v4()
+    // WiFi.subnetMask().v4()
+    // WiFi.gatewayIP().v4()
+    // WiFi.BSSID()
+    // WiFi.channel()
+  }
 }
 
 // void wifiConnectFast() {
@@ -156,6 +169,12 @@ void wifiConnect() {
 // }
 
 void readSensorAHT20(){
+  if(DEBUG_MODE){
+    current_temperature = 22.4;
+    current_humidity = 77.34;
+    return;
+  }
+  
   int countRetry = 0;
   while(!aht20.available()){
     if(200 < countRetry){
@@ -178,7 +197,7 @@ void sendSensorData(){
   HTTPClient http;
 
   http.begin(client, settings.ha_url);
-  http.addHeader("Authorization", "Bearer "+settings.ha_access_key);
+  http.addHeader("Authorization", "Bearer "+String(settings.ha_access_key));
   http.addHeader("Content-Type", "application/json");
   String httpRequestData = "{\"state\": \"" + String(current_temperature) + "\", \"attributes\": {\"unit_of_measurement\": \"°C\", \"device_class\": \"temperature\", \"humidity\":\"" + String(current_humidity) + "\", \"battery_voltage\":\"" + String(current_voltage) + "\"}}";
   int httpResponseCode = http.POST(httpRequestData);
@@ -256,14 +275,14 @@ const char html[] PROGMEM = R"rawliteral(
 
 
     <form action="/save" method="POST">
-      <label for="wifi_name">First name:</label>
+      <label for="wifi_name">Wi-Fi name:</label>
       <br>
-      <input type="text" name="wifi_name" placeholder="Wi-Fi name" value="%PLACEHOLDER_SSID%" style="width: 95%;">
+      <input type="text" name="wifi_name" placeholder="Wi-Fi name" value="%PLACEHOLDER_SSID%">
       <br>
 
       <label for="wifi_pass">Wifi Password:</label>
       <br>
-      <input type="password" name="wifi_pass" placeholder="Wi-Fi password" value="%PLACEHOLDER_PASS%" style="width: 95%;">
+      <input type="text" name="wifi_pass" placeholder="Wi-Fi password" value="%PLACEHOLDER_PASS%">
       <br>
 
       <input type="checkbox" id="optimize_wifi" name="optimize_wifi" value="optimize_wifi">
@@ -273,19 +292,19 @@ const char html[] PROGMEM = R"rawliteral(
 
       <label for="ha_url">Home Assistant URL:</label>
       <br>
-      <input type="text" name="ha_url" placeholder="Home Assistant URL" value="%PLACEHOLDER_HA_URL%" style="width: 95%;">
+      <input type="text" name="ha_url" placeholder="Home Assistant URL" value="%PLACEHOLDER_HA_URL%">
       <br>
       
-      <label for="ha_access_key">Home Assistant Access Key:</label>
+      <label for="ha_ak">Home Assistant Access Key:</label>
       <br>
-      <input type="text" name="ha_access_key" placeholder="Home Assistant Access Key" value="%PLACEHOLDER_HA_ACCESS_KEY%" style="width: 95%;">
+      <input type="text" name="ha_ak" placeholder="Home Assistant Access Key" value="%PLACEHOLDER_HA_ACCESS_KEY%">
       <br>
       <br>
 
 
       <label for="deep_sleep">Deep sleep duration:</label>
       <br>
-      <input type="number" name="deep_sleep" placeholder="Deep sleep duration(s)" min="5" max="4260" value="%PLACEHOLDER_DEEP_SLEEP%" style="width: 95%;">
+      <input type="number" name="deep_sleep" placeholder="Deep sleep duration(s)" min="5" max="4260" value="%PLACEHOLDER_DEEP_SLEEP%">
       <br>
       <br>
 
@@ -304,6 +323,14 @@ const char html[] PROGMEM = R"rawliteral(
 
     <br>
     <form action="/reboot" method="POST"><input type="submit" value="Reboot"></form>
+
+    <br>
+    <a href="/update">Update firmware</a>
+
+    <br>
+    <br>
+    <form action="/hard-reset" method="POST"><input type="submit" value="RESET TO DEFAULT"></form>
+
   </body>
 </html>)rawliteral";
 
@@ -323,12 +350,18 @@ String processor(const String& var)
     return settings.ssid;
   }
   else if(var == "PLACEHOLDER_PASS") {
+    Serial.println("settings.pass:");
+    Serial.println(settings.pass);
     return settings.pass;
   }
   else if(var == "PLACEHOLDER_HA_URL") {
+    Serial.println("settings.ha_url:");
+    Serial.println(settings.ha_url);
     return settings.ha_url;
   }
   else if(var == "PLACEHOLDER_HA_ACCESS_KEY") {
+    Serial.println("settings.ha_access_key:");
+    Serial.println(settings.ha_access_key);
     return settings.ha_access_key;
   }
   else if(var == "PLACEHOLDER_DEEP_SLEEP") {
@@ -358,6 +391,7 @@ void setupWiFiAndServer()
 
   server.on("/save", HTTP_POST, handleSaveConfig);
   server.on("/reboot", HTTP_POST, handleReset);
+  server.on("/hard-reset", HTTP_POST, handleHardReset);
   server.onNotFound(notFound);
 
   AsyncElegantOTA.begin(&server);    // Start ElegantOTA
@@ -370,47 +404,53 @@ void notFound(AsyncWebServerRequest *request) {
 }
 
 void handleSaveConfig(AsyncWebServerRequest *request) {
-  Serial.println("Save config");
-
-  // int params = request->params();
-  // for (int i = 0; i < params; i++) {
-  //   AsyncWebParameter* p = request->getParam(i);
-  //   Serial.printf("POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
-  // }
+  Configuration new_config;
 
 
-  if (request->hasParam("wifi_name")) {
-    settings.ssid = request->getParam("wifi_name", true)->value();
-    Serial.println(settings.ssid);
+  Serial.println("Save config, with params: ");
+
+  int params = request->params();
+  Serial.println(params);
+  for (int i = 0; i < params; i++) {
+    AsyncWebParameter* p = request->getParam(i);
+    const String key = p -> name();
+    String value = p -> value();
+    // String key = p->name().c_str();
+    // String value = p->value().c_str();
+
+    Serial.printf("POST[%s]: %s\n", key, p -> value());
+
+
+    if (key == "wifi_name") {
+      value.toCharArray(new_config.ssid, value.length() + 1);
+    }
+    else if (key == "wifi_pass") {
+      value.toCharArray(new_config.pass, value.length() + 1);
+    }
+    else if (key == "ha_url") {
+      value.toCharArray(new_config.ha_url, value.length() + 1);
+    }
+    else if (key == "ha_ak") {
+      value.toCharArray(new_config.ha_access_key, value.length() + 1);
+    }
+    else if (key == "deep_sleep") {
+      new_config.deep_sleep_sec = value.toInt();
+    }
+    else if (key == "battery") {
+      new_config.max_voltage = value.toFloat();
+    } else {
+      Serial.println("Unknown");
+    }
+    Serial.println("Done");
   }
 
-  if (request->hasParam("wifi_pass")) {
-    settings.pass = request->getParam("wifi_pass", true)->value();
-    Serial.println(settings.pass);
-  }
-
-  if (request->hasParam("ha_url")) {
-    settings.ha_url = request->getParam("ha_url", true)->value();
-    Serial.println(settings.ha_url);
-  }
-
-  if (request->hasParam("ha_access_key")) {
-    settings.ha_access_key = request->getParam("ha_access_key", true)->value();
-    Serial.println(settings.ha_access_key);
-  }
-
-  if (request->hasParam("deep_sleep")) {
-    String deep_sleep = request->getParam("deep_sleep", true)->value();
-    Serial.println(deep_sleep);
-    settings.deep_sleep_sec = deep_sleep.toInt();
-  }
-
-  saveConfig();
+  saveConfig(new_config);
   
-  request->send_P(200, "text/html", "<h1>Configurations successfully saved</h1><form action=\"/reboot\" method=\"POST\"><input type=\"submit\" value=\"Reboot\"></form>");
+  //request->send_P(200, "text/html", "<h1>Configurations successfully saved</h1><form action=\"/reboot\" method=\"POST\"><input type=\"submit\" value=\"Reboot\"></form>");
 
   // webServer.send(400, "text/plain", "400: Invalid Request");         // The request is invalid, so send HTTP status 400
   //   return;
+  request->redirect("/");
 }
 
 void handleReset(AsyncWebServerRequest *request) {
@@ -419,27 +459,42 @@ void handleReset(AsyncWebServerRequest *request) {
   ESP.deepSleep(2e6, WAKE_RF_DEFAULT);//Deep sleep mode for 2 seconds
 }
 
+void handleHardReset(AsyncWebServerRequest *request) {
+  Serial.println("reseting");
+  resetConfig();
+  request->redirect("/");
+}
+
 //--------------------------------EEPROM---------------------------------
 
-void saveConfig(){
+void resetConfig(){
+  // It is still necessary to call begin
+  // or no wipe will be performed
+  EEPROM.begin(EEPROM_MIN_SIZE);
+
+
+  boolean result = EEPROM.wipe();
+  if (result) {
+    Serial.println("All EEPROM data wiped");
+  } else {
+    Serial.println("EEPROM data could not be wiped from flash store");
+  }
+}
+
+void saveConfig(Configuration new_config){
   Serial.print("Saving to EEPROM:");
-  Serial.println(settings.ssid);
-  Serial.println(settings.pass);
-  Serial.println(settings.deep_sleep_sec);
-  Serial.println(settings.ha_url);
-  Serial.println(settings.ha_access_key);
 
   boolean okWiping = EEPROM.wipe();
   Serial.println((okWiping) ? "Wiping OK" : "Wiping failed");
 
-  EEPROM.put(0, settings);
+  EEPROM.put(0, new_config);
   Serial.println("Written custom data type!");
 
   // write the data to EEPROM
   boolean ok = EEPROM.commit();
   Serial.println((ok) ? "Commit OK" : "Commit failed");
 
-  delay(2000);
+  settings = new_config;
 }
 
 void loadConfig(){
@@ -450,5 +505,6 @@ void loadConfig(){
   Serial.println(settings.deep_sleep_sec);
   Serial.println(settings.ha_url);
   Serial.println(settings.ha_access_key);
+  Serial.println(settings.max_voltage);
   Serial.println("Done");
 }
