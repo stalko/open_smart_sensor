@@ -76,6 +76,8 @@ void setup(void)
     Serial.print(EEPROM.percentUsed());
     Serial.println("% of ESP flash space currently used");
     loadConfig();
+  } else {
+    config_mode = true;
   }
 
   // WiFi.setAutoConnect(false); // prevent early autoconnect
